@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useParams, useOutletContext, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { saveToDB } from '../../utils/dbUtils';
@@ -7,6 +8,7 @@ import MainEditor from './MainEditor';
 import RightSidebar from './RightSidebar';
 import TemplateModal from './TemplateModal';
 import FlipbookPreview from './FlipbookPreview';
+import { convertPdfToImages, generatePdfPageSvg } from '../../utils/pdfUtils';
 
 /**
  * Internal helper to parse layers from SVG content recursively.
@@ -79,6 +81,10 @@ const TemplateEditor = () => {
   const [currentFrameId, setCurrentFrameId] = useState(null);
   const [activeMainTool, setActiveMainTool] = useState('select');
   const [activeTopTool, setActiveTopTool] = useState('editor');
+  
+  const [pdfProcessing, setPdfProcessing] = useState(null); // { current, total, message }
+  const pdfInputRef = useRef(null);
+  const pdfInsertIndexRef = useRef(null);
   
   const autoSaveTimerRef = useRef(null);
   const isFirstLoadRef = useRef(true);
@@ -514,6 +520,89 @@ const TemplateEditor = () => {
       return updated;
     });
     setActivePageIndex(toIndex);
+  };
+
+  const handleAddFileClick = (index) => {
+    pdfInsertIndexRef.current = index;
+    if (pdfInputRef.current) pdfInputRef.current.click();
+  };
+
+  const handlePdfFileSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Check if it's a PDF
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        alert("Please select a PDF file.");
+        return;
+    }
+
+    // Reset input
+    e.target.value = '';
+
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const storedUser = localStorage.getItem('user');
+    const user = storedUser ? JSON.parse(storedUser) : null;
+    const emailId = user?.emailId;
+
+    if (!emailId || !v_id) {
+        console.error("Missing emailId or v_id for asset upload");
+        return;
+    }
+
+    setPdfProcessing({ current: 0, total: 1, message: 'Processing PDF...' });
+
+    try {
+        const images = await convertPdfToImages(file, 2, 12);
+        const newPages = [];
+        
+        for (let i = 0; i < images.length; i++) {
+            setPdfProcessing({ current: i + 1, total: images.length, message: `Uploading page ${i + 1} of ${images.length}...` });
+            
+            const formData = new FormData();
+            formData.append('file', images[i].blob, `pdf-page-${i + 1}.png`);
+            formData.append('emailId', emailId);
+            formData.append('type', 'image');
+            formData.append('v_id', v_id);
+            formData.append('folderName', currentBook?.folderName || 'My Flipbooks');
+            formData.append('flipbookName', currentBook?.flipbookName || 'Untitled');
+            formData.append('page_v_id', 'global');
+
+            const res = await axios.post(`${backendUrl}/api/flipbook/upload-asset`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+
+            const fullUrl = `${backendUrl}${res.data.url}`;
+            const pageName = `PDF Page ${i + 1}`;
+            const html = generatePdfPageSvg(fullUrl, pageName);
+            
+            // Parse layers for the new page
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'image/svg+xml');
+            const layers = parseLayersFromSVG(doc.documentElement);
+
+            newPages.push({
+                id: 'page_' + Math.random().toString(36).substr(2, 9),
+                name: pageName,
+                html,
+                layers
+            });
+        }
+
+        saveToHistory();
+        setPages(prev => {
+            const updated = [...prev];
+            const insertIdx = pdfInsertIndexRef.current !== null ? pdfInsertIndexRef.current + 1 : updated.length;
+            updated.splice(insertIdx, 0, ...newPages);
+            return updated;
+        });
+
+    } catch (error) {
+        console.error("PDF upload error:", error);
+        alert("Failed to process PDF. Please try again.");
+    } finally {
+        setPdfProcessing(null);
+    }
   };
 
   const toggleLayerVisibility = (pageIndex, ids) => {
@@ -2170,6 +2259,7 @@ const TemplateEditor = () => {
         currentBook={currentBook}
         setCurrentBook={setCurrentBook}
         onSave={saveFlipbook}
+        onAddFile={handleAddFileClick}
       />
 
       <MainEditor 
@@ -2182,6 +2272,7 @@ const TemplateEditor = () => {
         clearPage={clearPage}
         deletePage={deletePage}
         onOpenTemplateModal={handleOpenTemplateModal}
+        onAddFile={handleAddFileClick}
         selectedLayerId={selectedLayerId}
         setSelectedLayerId={setSelectedLayerId}
         updatePageHtml={updatePageHtml}
@@ -2237,6 +2328,46 @@ const TemplateEditor = () => {
           targetPage={0}
           settings={{}}
         />
+      )}
+
+      {/* Hidden File Input for PDF Upload */}
+      <input 
+        type="file" 
+        ref={pdfInputRef} 
+        style={{ display: 'none' }} 
+        accept=".pdf,application/pdf"
+        onChange={handlePdfFileSelect}
+      />
+
+      {/* PDF Processing Overlay */}
+      {pdfProcessing && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white rounded-[1.2vw] p-[2.5vw] shadow-2xl max-w-[25vw] w-full flex flex-col items-center text-center">
+            <div className="relative w-[5vw] h-[5vw] mb-[1.5vw]">
+              <div className="absolute inset-0 border-[0.3vw] border-indigo-100 rounded-full"></div>
+              <div 
+                className="absolute inset-0 border-[0.3vw] border-indigo-600 rounded-full border-t-transparent animate-spin"
+              ></div>
+            </div>
+            
+            <h3 className="text-[1.2vw] font-bold text-gray-900 mb-[0.5vw]">
+              {pdfProcessing.message}
+            </h3>
+            
+            <div className="w-full bg-gray-100 h-[0.6vw] rounded-full overflow-hidden mb-[0.8vw]">
+              <motion.div 
+                className="h-full bg-indigo-600"
+                initial={{ width: 0 }}
+                animate={{ width: `${(pdfProcessing.current / pdfProcessing.total) * 100}%` }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
+            
+            <p className="text-[0.85vw] text-gray-500 font-medium">
+              Please wait while we prepare your pages
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

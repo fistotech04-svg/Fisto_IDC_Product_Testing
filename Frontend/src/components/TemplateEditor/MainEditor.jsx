@@ -192,6 +192,7 @@ const MainEditor = ({
   clearPage,
   deletePage,
   onOpenTemplateModal,
+  onAddFile,
   selectedLayerId,
   setSelectedLayerId,
   updatePageHtml,
@@ -4515,7 +4516,7 @@ const MainEditor = ({
                         <MenuOption 
                           icon={<FilePlusIcon />} 
                           label="Add File" 
-                          onClick={() => setOpenMenuIndex(null)}
+                          onClick={() => { onAddFile && onAddFile(activePageIndex); setOpenMenuIndex(null); }}
                         />
                         <MenuOption 
                           icon={<DuplicateIcon />} 
@@ -4683,7 +4684,7 @@ const MainEditor = ({
                           <MenuOption 
                             icon={<FilePlusIcon />} 
                             label="Add File" 
-                            onClick={() => setOpenMenuIndex(null)}
+                            onClick={() => { onAddFile && onAddFile(displayIndex); setOpenMenuIndex(null); }}
                           />
                           <MenuOption 
                             icon={<DuplicateIcon />} 
